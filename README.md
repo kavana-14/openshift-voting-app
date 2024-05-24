@@ -14,9 +14,9 @@ This project contains reworked voting application from [Docker Official Samples]
 - [oc CLI](https://medium.com/r/?url=https%3A%2F%2Fmirror.openshift.com%2Fpub%2Fopenshift-v4%2Fclients%2Foc%2Flatest%2F)
 - [git](https://medium.com/r/?url=https%3A%2F%2Fgit-scm.com%2Fdownloads)
 
->I will use CodeReady Containers (crc) for this example, which is a minimal OpenShift 4 cluster able to run on your local computer. 
-This could be an Openshift (version 3 or 4), OKD (version 3 or 4) or a Minishift.
-At the moment, I use crc 4.6.15 and oc CLI 4.6.16.
+>I will use Openshift dedicated for this example, which is a minimal OpenShift 4 cluster run on Red Hat developer sandbox. 
+This could be an Openshift (version 4).
+At the moment, I use oc CLI 4.14.0.
 Using git repositories allows us to keep a track of what has been done, to version all YAML files, as we can do for source code.
 Using and understanding the oc CLI will make it possible to automate the creation and deployment of applications.
 
@@ -42,26 +42,24 @@ The last things you should know:
 ## Getting started
 
 Now, let's create an Openshift project and deploy redis and postgreSQL databases.
-Connect to your Openshift cluster by using the command `oc login <SERVER_URL>` with your credentials and replace <SERVER_URL> before run any command with the oc client.
+Connect to your Openshift cluster by using the command `oc login --token-<token> --server=<SERVER_URL>` with your credentials and replace <token> and <SERVER_URL> before run any command with the oc client.
 
 ```bash
 # Create voting-app project
 $ oc new-project voting-app
 
-# Allow default serviceaccount from voting-app project to run containers with any non-root user
-# For the example, we will use containers running as user with uid=1001
-$ oc adm policy add-scc-to-user nonroot -z default -n voting-app
-
 # Create non persistent PostgreSQL database
-$ oc process postgresql-ephemeral -n openshift \
-    -p DATABASE_SERVICE_NAME=db \
-    -p POSTGRESQL_USER=postgres \
-    -p POSTGRESQL_PASSWORD=postgres \
-    -p POSTGRESQL_DATABASE=postgres | oc apply -f - -n voting-app
+$ oc new-app postgresql:latest --name=db \ 
+-e POSTGRESQL_DATABASE=postgres \ 
+-e POSTGRESQL_USER=postgres \ 
+-e POSTGRESQL_PASSWORD=postgres \ 
+-e POSTGRESQL_PORT=5432 
+ 
 
 # Create non persistent Redis
-$ oc process redis-ephemeral -n openshift \
-    -p REDIS_PASSWORD=redis | oc apply -f - -n voting-app
+$ oc new-app redis:latest --name=redis \
+-e REDIS_PASSWORD=redis \
+-e REDIS_PORT=6379 
 ```
 
 By default, there are some templates already present on your cluster.
@@ -77,77 +75,72 @@ $ oc process -f openshift-specifications/templates/redis-ephemeral-template.yaml
     -p REDIS_PASSWORD=redis | oc apply -f - -n voting-app
 ```
 
-Initialize voting-app project with common objects for the three different ways deployment modes: 
-```bash
-# Deploying services, routes and imagestreams
-$ oc apply -f openshift-specifications/ -n voting-app
-```
-
 What we will deploy:
 ![deployments](docs/img/deployments.png)
 
-### 1. With container images
-
-First, we will deploy this with container images. These images can be built and stored in any registry.
-
-If you want to change images, modify **image attribute** in YAML files located in openshift-specifications/with-images directory.
-For example, `image: my-registry:443/my-image:1.0`.
-
-This method is used when you have already a toolchain that build images for you and you don't want to change this operation. 
-
->If you want to build images and push them in a registry, you can do that as well. If you want to use images that I pushed for this article, you do not have to do anything.
-
-Let's deploy our application:
+Login to your openshift registry to push the image to the registry. 
 ```bash
-# Deploying DeploymentConfigs with container
-$ oc apply -f openshift-specifications/with-images -n voting-app
+$ oc registry login 
+
+$  sudo cp /run/user/1000/containers/auth.json ~/.docker/config.json 
+
+#From the docker, login to your openshift registry. oc registry login displays the path to registry, use that path for login
+$ docker login <openshift-registry-path>
 ```
-
-When the application is up and running, you can access the 2 microservices (vote and result) through the routes created for this purpose.
-In my case, with application running on crc, I can access to vote app at http://vote-voting-app..apps-crc.testing/ and result app at http://result-voting-app..apps-crc.testing/. Take a look at the routes that Openshift has automatically created for you based on the router configuration.
-
-### 2. With Dockerfile
-
-In a second step, we are going to deploy the same application but with some changes: use of Dockerfile in your Git repository. It's Openshift that will take care of building our images. 
+###  With Dockerfile
+In this step, we are going to deploy the same application but with some changes: use of Dockerfile in your Git repository. It's Openshift that will take care of building our images. 
 Let's update Openshift objects to try out this method and trigger container image building.
 This method allows you to update your Dockerfile and source code at the same time in your SCM, you keep control over everything and it's all versioned.
 
 ```bash
-# Deploying new DeploymentConfigs and BuildConfigs using dockerfile
-$ oc apply -f openshift-specifications/with-dockerfile -n voting-app
+#Deploy Polling Application
+$ docker build -t openshift-registry-path/project-name/vote . 
+ 
+$ docker push openshift-registry-path/project-name/vote:latest 
 
-# Run images build, DeploymentConfigs will be triggered when the builds are completed.
-$ oc start-build result
-$ oc start-build vote
-$ oc start-build worker
-```
+$ oc new-app openshift-registry-path/project-name/vote:latest --name=vote \ 
+-e REDIS_HOST=redis \ 
+-e REDIS_PASSWORD=redis \ 
+-e REDIS_PORT=6379 
 
-Once the builds are completed, you can check vote and result application are running.
+#Deploy Worker Application 
+$ docker build -t openshift-registry-path/project-name/worker . 
+ 
+$ docker push openshift-registry-path/project-name/worker:latest 
+ 
+oc new-app openshift-registry-path/project-name/worker:latest --name=worker \ 
+-e REDIS_HOST=redis \ 
+-e REDIS_PASSWORD=redis \ 
+-e REDIS_PORT=6379 \ 
+-e POSTGRESQL_HOST=db \ 
+-e POSTGRESQL_PORT=5432 \ 
+-e POSTGRESQL_DATABASE=postgres \ 
+-e POSTGRESQL_USER=postgres \ 
+-e POSTGRESQL_PASSWORD=postgres 
 
-### 3. With Source to Image (S2I)
+#Deploy Result Application
+$ docker build -t openshift-registry-path/project-name/result .
 
-Now, what if you don't want to worry about a Dockerfile and want to stay focused on your source code? This is the last method we are going to implement.
-Let's update Openshift objects again and trigger new builds.
+$ docker push openshift-registry-path/project-name /result:latest 
 
-```bash
-# Deploying new DeploymentConfigs and new BuildConfigs using s2i
-$ oc apply -f openshift-specifications/with-s2i -n voting-app
+$ oc new-app openshift-registry-path/project-name/result:latest --name=result \ 
+-e POSTGRESQL_HOST=db \ 
+-e POSTGRESQL_PORT=5432 \ 
+-e POSTGRESQL_DATABASE=postgres \ 
+-e POSTGRESQL_USER=postgres \ 
+-e POSTGRESQL_PASSWORD=postgres
 
-# Run images build, DeploymentConfigs will be triggered when the builds are completed.
-$ oc start-build result-s2i
-$ oc start-build vote-s2i
-$ oc start-build worker-s2i
+#Expose Services 
+$ oc port-forward poll 8080:80 
+$ oc port-forward result 8080:80 
+
+$ oc expose service/vote 
+$ oc expose service/result 
 ```
 
 Once the builds are completed, you can check vote and result application are running.
 
 ## Conclusion
-
-We have learned how to deploy applications on Openshift in several ways :
-- With container image already built
-- With Dockerfile from Git repository
-- With Source to Image (S2I)
-
 There are several ways to migrate applications, and there is not a best way to do that, it depends on how you want to manage your application lifecycle.
 Do you already have tools that build images and store them, and you don't want to migrate everything to Openshift? Then deploy your applications using your container images.
 Do you want to deploy applications from their source code? If you want to take care of a Dockerfile, choose to build your application with it. If not, Source to Image allows you to deploy already secured container images in your cluster.
