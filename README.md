@@ -42,7 +42,7 @@ The last things you should know:
 ## Getting started
 
 Now, let's create an Openshift project and deploy redis and postgreSQL databases.
-Connect to your Openshift cluster by using the command `oc login --token-<token> --server=<SERVER_URL>` with your credentials and replace <token> and <SERVER_URL> before run any command with the oc client.
+Connect to your Openshift cluster by using the command `oc login --token=<token> --server=<SERVER_URL>` with your credentials and replace <token> and <SERVER_URL> before run any command with the oc client.
 
 ```bash
 # Create voting-app project
